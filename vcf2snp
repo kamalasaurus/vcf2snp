@@ -1,0 +1,52 @@
+#!/usr/bin/ruby
+
+require 'csv'
+
+input = ARGV[0]
+output = input.split('.').first.concat('.snp')
+
+# this covers the less obvious cases:  transposed
+# sequences of same length, ambigous deletion or
+# insertion based on substitution options.
+def compare(selected, alleles)
+  allele_lengths = alleles.map(&:length)
+  min_length = allele_lengths.min
+  unique_lengths = allele_lengths.uniq.length
+  overlapping_minima = allele_lengths.tally[min_length]
+
+  alleles.index(selected) != 0 || unique_lengths == 1 ?
+    '-' : # when alt is or ref selected but transposed -
+    selected.length > min_length ?
+      'I' : # when ref is selected but is an Insertion
+      overlapping_minima == 1 ?
+        'D' : # when ref is selected but a Deletion
+        '-' # multiple minimum is an indeterminate state for Deletions, since you can't be < min
+end
+
+# this covers all the basic conditions: snps, obvious
+# deletions, insertions
+def select_allele(alleles, arg)
+  ref = alleles.first
+  alt = alleles[arg] # alt == ref when arg == 0
+  # 0 <- ==, 1 <- ref > alt, -1 <- ref < alt
+  selected = [alt, 'D', 'I'][ref.length <=> alt.length]
+  selected.length == 1 ?
+    selected :
+    compare(selected, alleles)
+end
+
+CSV.open(output, 'w', col_sep: "\t",) do |csv|
+  csv << ['rsid', 'chromosome', 'position', 'genotype']
+  CSV.foreach(input, col_sep: "\t", skip_lines: /^#/) do |row|
+    chrom, pos, rsid, *ref_alt, qual, filter, info, form, sample = row.to_a
+    chromosome = chrom.delete_prefix('chr')
+    alleles = ref_alt.map { |allele| allele.split(',') }.flatten
+
+    genotype = sample
+      .split(':').first
+      .split(/\/|\|/).map(&:to_i)
+      .reduce("") { |out, arg| out.concat(select_allele(alleles, arg)) }
+
+    csv << [rsid, chromosome, pos, genotype]
+  end
+end
